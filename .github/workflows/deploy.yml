@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      HOST: ${{ secrets. }}
+      HOST: ${{ secrets.SERVER_IP}}
       USER: ${{ secrets.SERVER_USER }}
       PASS: ${{ secrets.SERVER_PASSWORD }}
       SHA: ${{ github.sha }}
