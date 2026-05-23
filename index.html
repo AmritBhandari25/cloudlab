@@ -162,10 +162,11 @@
       0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(168,255,120,.5); }
       50%      { opacity:.5; box-shadow: 0 0 0 6px rgba(168,255,120,0); }
     }
-    [data-theme="light"] @keyframes pulse {
+    @keyframes pulse-light {
       0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(45,122,58,.5); }
       50%      { opacity:.5; box-shadow: 0 0 0 6px rgba(45,122,58,0); }
     }
+    [data-theme="light"] .dot { animation-name: pulse-light; }
 
     /* ═══ SHARED SECTION ═══ */
     section {

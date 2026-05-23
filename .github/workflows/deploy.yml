@@ -28,8 +28,8 @@ jobs:
 
           # Write Apache VirtualHost config (heredoc-free to avoid YAML indentation issues)
           echo '<VirtualHost *:'"$PORT"'>' > /tmp/gh-actions.conf
-          echo '    DocumentRoot /home/'"$USER"'/gh-actions-app/current' >> /tmp/gh-actions.conf
-          echo '    <Directory /home/'"$USER"'/gh-actions-app/>' >> /tmp/gh-actions.conf
+          echo '    DocumentRoot /home/'"$USER"'/gh-actions-app-8009/current' >> /tmp/gh-actions.conf
+          echo '    <Directory /home/'"$USER"'/gh-actions-app-8009/>' >> /tmp/gh-actions.conf
           echo '        Options -Indexes +FollowSymLinks' >> /tmp/gh-actions.conf
           echo '        AllowOverride None' >> /tmp/gh-actions.conf
           echo '        Require all granted' >> /tmp/gh-actions.conf
@@ -71,7 +71,7 @@ jobs:
 
             # 6. Fix directory permissions for Apache
             echo '$PASS' | sudo -S chmod 755 /home/\$USER/
-            echo '$PASS' | sudo -S chown -R \$USER:www-data ~/gh-actions-app/
+            echo '$PASS' | sudo -S chown -R \$USER:www-data ~/gh-actions-app-8009/
 
             # 7. Test config and reload Apache gracefully
             echo '$PASS' | sudo -S apache2ctl configtest
@@ -88,7 +88,7 @@ jobs:
 
           echo "=== Determining inactive version (blue-green) ==="
           INACTIVE=$(sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$USER@$HOST" "
-            APP_DIR=/home/$USER/gh-actions-app
+            APP_DIR=/home/$USER/gh-actions-app-8009
             if [ -L \$APP_DIR/current ] && [ \"\$(readlink \$APP_DIR/current)\" = \"\$APP_DIR/v2\" ]; then
               echo v1
             else
@@ -104,11 +104,11 @@ jobs:
           echo "Commit: $SHORT_SHA | Time: $DEPLOY_TIME"
 
           echo "=== Uploading to inactive version ==="
-          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/index_deploy.html "$USER@$HOST:/home/$USER/gh-actions-app/$INACTIVE/index.html"
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/index_deploy.html "$USER@$HOST:/home/$USER/gh-actions-app-8009/$INACTIVE/index.html"
 
           echo "=== Atomic symlink swap + graceful Apache reload ==="
           sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$USER@$HOST" "
-            APP_DIR=/home/$USER/gh-actions-app
+            APP_DIR=/home/$USER/gh-actions-app-8009
             ln -sfn \$APP_DIR/$INACTIVE \$APP_DIR/current
             echo '$PASS' | sudo -S apache2ctl graceful
             echo \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ') - deployed $INACTIVE\" >> \$APP_DIR/deploy.log
