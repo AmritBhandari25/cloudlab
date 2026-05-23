@@ -10,11 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      HOST: ${{ secrets.SERVER_IP}}
+      HOST: ${{ secrets.SERVER_IP }}
       USER: ${{ secrets.SERVER_USER }}
       PASS: ${{ secrets.SERVER_PASSWORD }}
       SHA: ${{ github.sha }}
-      PORT: "8009" 
+      PORT: "8002"
 
     steps:
       - uses: actions/checkout@v4
@@ -26,56 +26,59 @@ jobs:
         run: |
           set -e
 
-          # Write Apache VirtualHost config (heredoc-free to avoid YAML indentation issues)
-          echo '<VirtualHost *:'"$PORT"'>' > /tmp/gh-actions.conf
-          echo '    DocumentRoot /home/'"$USER"'/gh-actions-app/current' >> /tmp/gh-actions.conf
-          echo '    <Directory /home/'"$USER"'/gh-actions-app/>' >> /tmp/gh-actions.conf
-          echo '        Options -Indexes +FollowSymLinks' >> /tmp/gh-actions.conf
-          echo '        AllowOverride None' >> /tmp/gh-actions.conf
-          echo '        Require all granted' >> /tmp/gh-actions.conf
-          echo '    </Directory>' >> /tmp/gh-actions.conf
-          echo '    ErrorLog ${APACHE_LOG_DIR}/gh-actions-error.log' >> /tmp/gh-actions.conf
-          echo '    CustomLog ${APACHE_LOG_DIR}/gh-actions-access.log combined' >> /tmp/gh-actions.conf
-          echo '</VirtualHost>' >> /tmp/gh-actions.conf
+          # Write Apache VirtualHost config with unique file names based on PORT
+          echo '<VirtualHost *:'"$PORT"'>' > /tmp/gh-actions-$PORT.conf
+          echo '    DocumentRoot /home/'"$USER"'/gh-actions-app-'"$PORT"'/current' >> /tmp/gh-actions-$PORT.conf
+          echo '    <Directory /home/'"$USER"'/gh-actions-app-'"$PORT"'/>' >> /tmp/gh-actions-$PORT.conf
+          echo '        Options -Indexes +FollowSymLinks' >> /tmp/gh-actions-$PORT.conf
+          echo '        AllowOverride None' >> /tmp/gh-actions-$PORT.conf
+          echo '        Require all granted' >> /tmp/gh-actions-$PORT.conf
+          echo '    </Directory>' >> /tmp/gh-actions-$PORT.conf
+          echo '    ErrorLog ${APACHE_LOG_DIR}/gh-actions-error-'"$PORT"'.log' >> /tmp/gh-actions-$PORT.conf
+          echo '    CustomLog ${APACHE_LOG_DIR}/gh-actions-access-'"$PORT"'.log combined' >> /tmp/gh-actions-$PORT.conf
+          echo '</VirtualHost>' >> /tmp/gh-actions-$PORT.conf
+          
+          # SCP unique config file to server
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/gh-actions-$PORT.conf "$USER@$HOST:/tmp/gh-actions-$PORT.conf"
 
-          # SCP config file to server
-          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/gh-actions.conf "$USER@$HOST:/tmp/gh-actions.conf"
-
-          # SSH: install Apache, create dirs, configure, reload
+          # SSH: install Apache, create unique dirs, configure, reload
           sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$USER@$HOST" "
             set -e
+
+            # 0. Configure passwordless sudo for deploy user (once)
+            echo \"$PASS\" | sudo -S sh -c \"echo '$USER ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/$USER\"
+            echo \"$PASS\" | sudo -S chmod 0440 /etc/sudoers.d/$USER
 
             # 1. Install Apache if not already installed
             if ! dpkg -s apache2 2>/dev/null | grep -q 'Status: install ok installed'; then
               echo 'Installing Apache...'
-              echo '$PASS' | sudo -S apt-get update -qq
-              echo '$PASS' | sudo -S apt-get install -y -qq apache2
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq apache2
             fi
 
-            # 2. Create app directories (idempotent)
-            mkdir -p ~/gh-actions-app/{v1,v2}
+            # 2. Create unique app directories using PORT (idempotent)
+            mkdir -p ~/gh-actions-app-$PORT/{v1,v2}
 
-            # 3. Remove old Listen 8000, add Listen 8007 to ports.conf
-            echo '$PASS' | sudo -S sed -i '/^Listen 8000$/d' /etc/apache2/ports.conf 2>/dev/null || true
-            if ! grep -q 'Listen $PORT' /etc/apache2/ports.conf 2>/dev/null; then
-              echo '$PASS' | sudo -S sh -c 'echo \"Listen $PORT\" >> /etc/apache2/ports.conf'
+            # 3. Add Listen directive for your specific port
+            if ! grep -q \"^Listen $PORT\$\" /etc/apache2/ports.conf 2>/dev/null; then
+              sudo sh -c \"echo 'Listen $PORT' >> /etc/apache2/ports.conf\"
             fi
 
             # 4. Move VirtualHost config into place
-            echo '$PASS' | sudo -S mv /tmp/gh-actions.conf /etc/apache2/sites-available/gh-actions.conf
+            sudo mv /tmp/gh-actions-$PORT.conf /etc/apache2/sites-available/gh-actions-$PORT.conf
 
             # 5. Enable site if not already enabled
-            if ! [ -L /etc/apache2/sites-enabled/gh-actions.conf ]; then
-              echo '$PASS' | sudo -S a2ensite gh-actions.conf
+            if ! [ -L /etc/apache2/sites-enabled/gh-actions-$PORT.conf ]; then
+              sudo a2ensite gh-actions-$PORT.conf
             fi
 
             # 6. Fix directory permissions for Apache
-            echo '$PASS' | sudo -S chmod 755 /home/\$USER/
-            echo '$PASS' | sudo -S chown -R \$USER:www-data ~/gh-actions-app/
+            sudo chmod 755 /home/\$USER/
+            sudo chown -R \$USER:www-data ~/gh-actions-app-$PORT/
 
             # 7. Test config and reload Apache gracefully
-            echo '$PASS' | sudo -S apache2ctl configtest
-            echo '$PASS' | sudo -S apache2ctl graceful
+            sudo apache2ctl configtest
+            sudo apache2ctl graceful
           "
           echo "Server setup complete"
 
@@ -88,7 +91,8 @@ jobs:
 
           echo "=== Determining inactive version (blue-green) ==="
           INACTIVE=$(sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$USER@$HOST" "
-            APP_DIR=/home/$USER/gh-actions-app
+            # Target your unique directory
+            APP_DIR=/home/$USER/gh-actions-app-$PORT
             if [ -L \$APP_DIR/current ] && [ \"\$(readlink \$APP_DIR/current)\" = \"\$APP_DIR/v2\" ]; then
               echo v1
             else
@@ -104,13 +108,15 @@ jobs:
           echo "Commit: $SHORT_SHA | Time: $DEPLOY_TIME"
 
           echo "=== Uploading to inactive version ==="
-          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/index_deploy.html "$USER@$HOST:/home/$USER/gh-actions-app/$INACTIVE/index.html"
+          # Upload to your unique directory
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/index_deploy.html "$USER@$HOST:/home/$USER/gh-actions-app-$PORT/$INACTIVE/index.html"
 
           echo "=== Atomic symlink swap + graceful Apache reload ==="
           sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$USER@$HOST" "
-            APP_DIR=/home/$USER/gh-actions-app
+            # Target your unique directory
+            APP_DIR=/home/$USER/gh-actions-app-$PORT
             ln -sfn \$APP_DIR/$INACTIVE \$APP_DIR/current
-            echo '$PASS' | sudo -S apache2ctl graceful
+            sudo apache2ctl graceful
             echo \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ') - deployed $INACTIVE\" >> \$APP_DIR/deploy.log
           "
 
